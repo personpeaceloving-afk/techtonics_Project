@@ -1,7 +1,7 @@
 import pytest
 
 BASE_URL = "https://demo.inventree.org/api"
-TOKEN = "inv-fb927bf626acaa2127a8f8279f3d4d6335585d9e-20260413"
+TOKEN = "inv-61024d3ac9cd26e883afdc67848baaa137a46512-20260414"
 
 
 
