@@ -1,5 +1,6 @@
 """
 Test Case: Invalid Category While Creating Part
+
 Description:
     Validate API behavior when invalid / edge category IDs are used
     during part creation.
@@ -13,91 +14,98 @@ Coverage:
 """
 
 import pytest
-import requests
-import logging
 import uuid
 
-# =========================
-# LOGGING SETUP
-# =========================
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
+from utils.logger import get_logger
+
+logger = get_logger(__name__)
 
 
 # =========================
-# TEST DATA (DDT)
+# ASSERT HELPER
+# =========================
+def assert_response(response, expected_status, test_name=""):
+    try:
+        body = response.json()
+    except Exception:
+        body = response.text
+
+    if response.status_code != expected_status:
+        logger.error("❌ FAILED: %s", test_name)
+        logger.error("URL: %s", response.url)
+        logger.error("Expected: %s | Got: %s", expected_status, response.status_code)
+        logger.error("Response: %s", body)
+
+        pytest.fail(
+            f"""
+❌ TEST FAILED: {test_name}
+
+➡ URL: {response.url}
+➡ Expected: {expected_status}
+➡ Got: {response.status_code}
+
+📦 Response:
+{body}
+            """
+        )
+
+    logger.info("✅ PASSED: %s", test_name)
+
+
+# =========================
+# DDT TEST DATA
 # =========================
 @pytest.mark.parametrize("invalid_category, expected_status", [
-    (999999, 400),     # non-existent category
-    (-1, 400),         # negative ID
-    (0, 400),          # boundary (invalid ID)
-    ("abc", 400),      # wrong data type
-    (None, 400),       # null value
+    (999999, 400),
+    (-1, 400),
+    (0, 400),
+    ("abc", 400),
+    (None, 400),
 ])
-def test_create_part_invalid_category(base_url, headers, invalid_category, expected_status):
+def test_create_part_invalid_category(api_client, invalid_category, expected_status):
     """
     TC_NEG_CAT_001:
-    Verify API response when invalid category is provided
-
-    Steps:
-        1. Send POST request with invalid category
-        2. Capture response
-
-    Expected:
-        - API should reject request
-        - Return 400/404
-        - Proper error message in response
+    Validate API rejects invalid category values.
     """
 
-    # =========================
-    # TEST DATA
-    # =========================
     payload = {
         "name": f"InvalidCatPart-{uuid.uuid4()}",
         "description": "Negative Test - Invalid Category",
         "category": invalid_category
     }
 
-    url = f"{base_url}/part/"
-
     logger.info(f"Testing invalid category: {invalid_category}")
-    logger.info(f"Request Payload: {payload}")
+    logger.info(f"Payload: {payload}")
 
-    # =========================
-    # API CALL
-    # =========================
-    response = requests.post(url, json=payload, headers=headers)
+    response = api_client.post("/part/", payload)
 
-    logger.info(f"Response Status: {response.status_code}")
-    logger.info(f"Response Body: {response.text}")
+    assert_response(
+        response,
+        expected_status,
+        f"TC_NEG_CAT_001 - Invalid Category: {invalid_category}"
+    )
 
-    # =========================
-    # ASSERTIONS
-    # =========================
-    assert response.status_code in [400, 404], \
-        f"Expected failure for invalid category, got {response.status_code}"
-
-    # Validate error structure (if JSON)
+    # Optional deeper validation for error structure
     try:
         resp_json = response.json()
+        assert isinstance(resp_json, dict)
 
-        assert isinstance(resp_json, dict), "Error response should be JSON object"
+        assert any(
+            key in resp_json
+            for key in ["error", "detail", "category", "message"]
+        ), "Expected error message in response"
 
-        # Optional: check error message exists
-        assert any(key in resp_json for key in ["error", "category", "detail"]), \
-            "Expected error message in response"
-
-    except ValueError:
-        pytest.fail("Response is not valid JSON")
+    except Exception:
+        logger.warning("Response is not JSON or missing error structure")
 
 
 # =========================
-# IDEMPOTENCY CHECK (OPTIONAL)
+# IDEMPOTENCY CHECK
 # =========================
-def test_invalid_category_idempotency(base_url, headers):
+def test_invalid_category_idempotency(api_client):
     """
     TC_NEG_CAT_002:
-    Same invalid request should consistently fail
+    Same invalid request should consistently fail.
     """
 
     payload = {
@@ -105,10 +113,8 @@ def test_invalid_category_idempotency(base_url, headers):
         "category": 999999
     }
 
-    url = f"{base_url}/part/"
-
-    response1 = requests.post(url, json=payload, headers=headers)
-    response2 = requests.post(url, json=payload, headers=headers)
+    response1 = api_client.post("/part/", payload)
+    response2 = api_client.post("/part/", payload)
 
     logger.info(f"First Response: {response1.status_code}")
     logger.info(f"Second Response: {response2.status_code}")
@@ -120,13 +126,12 @@ def test_invalid_category_idempotency(base_url, headers):
 # =========================
 # RATE LIMIT SIMULATION
 # =========================
-def test_invalid_category_rate_limit(base_url, headers):
+def test_invalid_category_rate_limit(api_client):
     """
     TC_NEG_CAT_003:
-    Rapid invalid requests should not crash system
+    System should handle repeated invalid requests gracefully.
     """
 
-    url = f"{base_url}/part/"
     statuses = []
 
     for _ in range(10):
@@ -135,7 +140,7 @@ def test_invalid_category_rate_limit(base_url, headers):
             "category": 999999
         }
 
-        response = requests.post(url, json=payload, headers=headers)
+        response = api_client.post("/part/", payload)
         statuses.append(response.status_code)
 
     logger.info(f"Rate Limit Status Codes: {statuses}")

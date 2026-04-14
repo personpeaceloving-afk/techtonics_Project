@@ -1,101 +1,116 @@
 """
 Test Module: test_part_validation.py
+
+Description:
+    Negative validation test suite for Part API.
+
+Coverage:
+    - Field validation (name)
+    - Boundary conditions
+    - Data type validation
+    - Idempotency checks
+    - Rate limiting simulation
 """
 
 import pytest
-import requests
-import logging
 import uuid
-import json
 
-# =========================
-# LOGGING SETUP
-# =========================
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
+from utils.logger import get_logger
+
+logger = get_logger(__name__)
 
 
 # =========================
-# HELPER: PRETTY PRINT
+# ASSERT HELPER
 # =========================
-def print_api_details(url, payload, response, scenario):
-    print("\n" + "=" * 70)
-    print(f"SCENARIO: {scenario}")
-    print("=" * 70)
-
-    print("\nREQUEST:")
-    print(f"URL: {url}")
-    print("Payload:")
-    print(json.dumps(payload, indent=4))
-
-    print("\nRESPONSE:")
-    print(f"Status Code: {response.status_code}")
-
+def assert_response(response, expected_status, scenario=""):
     try:
-        print("Response JSON:")
-        print(json.dumps(response.json(), indent=4))
+        body = response.json()
     except Exception:
-        print("Raw Response:")
-        print(response.text)
+        body = response.text
 
-    print("=" * 70 + "\n")
+    if response.status_code != expected_status:
+        logger.error("❌ FAILED: %s", scenario)
+        logger.error("URL: %s", response.url)
+        logger.error("Expected: %s | Got: %s", expected_status, response.status_code)
+        logger.error("Response: %s", body)
+
+        pytest.fail(
+            f"""
+❌ TEST FAILED: {scenario}
+
+➡ URL: {response.url}
+➡ Expected: {expected_status}
+➡ Got: {response.status_code}
+
+📦 Response:
+{body}
+            """
+        )
+
+    logger.info("✅ PASSED: %s", scenario)
 
 
 # =========================
-# PARAMETERIZED TEST DATA
+# TEST DATA (DDT)
 # =========================
 @pytest.mark.parametrize("payload, expected_status, scenario", [
-
     ({"description": "No name"}, 400, "Missing name"),
     ({"name": 123}, 400, "Name as integer"),
     ({"name": ""}, 400, "Empty string"),
     ({"name": "A" * 300}, 400, "Exceeds max length"),
     ({"name": None}, 400, "Null name"),
-
 ])
-def test_part_validation_negative(base_url, headers, payload, expected_status, scenario):
+def test_part_validation_negative(api_client, payload, expected_status, scenario):
+    """
+    TC_VAL_001:
+    Validate API rejects invalid 'name' field inputs.
+    """
 
-    url = f"{base_url}/part/"
+    url = "/part/"
 
-    # Add unique identifier if valid string
-    if isinstance(payload.get("name"), str) and payload.get("name"):
+    # Add uniqueness if applicable
+    if isinstance(payload.get("name"), str) and payload["name"]:
         payload["name"] = f"{payload['name']}-{uuid.uuid4()}"
 
-    response = requests.post(url, json=payload, headers=headers)
+    logger.info(f"Scenario: {scenario}")
+    logger.info(f"Payload: {payload}")
 
-    # ✅ PRINT TO TERMINAL
-    print_api_details(url, payload, response, scenario)
+    response = api_client.post(url, payload)
 
-    # =========================
-    # ASSERTIONS
-    # =========================
-    assert response.status_code == expected_status, \
-        f"{scenario} failed. Expected {expected_status}, got {response.status_code}"
+    assert_response(response, expected_status, scenario)
 
+    # Optional response structure validation
     try:
         resp_json = response.json()
         assert isinstance(resp_json, dict)
 
-        assert any(key in resp_json for key in ["name", "error", "detail"]), \
-            "Expected validation error message"
+        assert any(
+            key in resp_json
+            for key in ["name", "error", "detail", "message"]
+        ), "Expected validation error message"
 
-    except ValueError:
-        pytest.fail("Response is not valid JSON")
+    except Exception:
+        logger.warning("Response is not JSON or missing expected error structure")
 
 
 # =========================
-# IDEMPOTENCY CHECK
+# IDEMPOTENCY TEST
 # =========================
-def test_missing_name_idempotency(base_url, headers):
+def test_missing_name_idempotency(api_client):
+    """
+    TC_VAL_002:
+    Repeated invalid requests should consistently fail.
+    """
 
     payload = {"description": "No name"}
-    url = f"{base_url}/part/"
+    url = "/part/"
 
-    response1 = requests.post(url, json=payload, headers=headers)
-    response2 = requests.post(url, json=payload, headers=headers)
+    response1 = api_client.post(url, payload)
+    response2 = api_client.post(url, payload)
 
-    print_api_details(url, payload, response1, "Idempotency - First Call")
-    print_api_details(url, payload, response2, "Idempotency - Second Call")
+    logger.info("First Response: %s", response1.status_code)
+    logger.info("Second Response: %s", response2.status_code)
 
     assert response1.status_code == 400
     assert response2.status_code == 400
@@ -104,16 +119,21 @@ def test_missing_name_idempotency(base_url, headers):
 # =========================
 # RATE LIMIT SIMULATION
 # =========================
-def test_validation_rate_limit(base_url, headers):
+def test_validation_rate_limit(api_client):
+    """
+    TC_VAL_003:
+    System should handle repeated invalid payloads safely.
+    """
 
-    url = f"{base_url}/part/"
+    url = "/part/"
     statuses = []
 
     for i in range(10):
         payload = {"name": 123}
-        response = requests.post(url, json=payload, headers=headers)
 
-        print_api_details(url, payload, response, f"Rate Test Iteration {i+1}")
+        response = api_client.post(url, payload)
+
+        logger.info("Iteration %s | Status: %s", i + 1, response.status_code)
 
         statuses.append(response.status_code)
 

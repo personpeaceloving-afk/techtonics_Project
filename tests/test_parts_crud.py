@@ -1,5 +1,6 @@
 """
 Test Module: test_part_crud.py
+
 Description:
     CRUD Test Suite for Part APIs (InvenTree)
 
@@ -14,44 +15,78 @@ Coverage:
 """
 
 import os
-import requests
 import pytest
-import logging
-import time
 import uuid
+
+from utils.logger import get_logger
+
+logger = get_logger(__name__)
+
 
 # =========================
 # CONFIG
 # =========================
-BASE_URL = os.environ.get("BASE_URL", "https://demo.inventree.org/api")
+BASE_URL = os.getenv("BASE_URL", "https://demo.inventree.org/api")
 PART_ENDPOINT = "/part/"
-AUTH_TOKEN = os.environ.get("INVENTREE_TOKEN")
-
-HEADERS = {
-    "Authorization": f"Token {AUTH_TOKEN}",
-    "Content-Type": "application/json"
-} if AUTH_TOKEN else {}
-
-# =========================
-# LOGGING
-# =========================
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
 
 
 # =========================
 # FIXTURE: CREATE PART
 # =========================
 @pytest.fixture
-def create_part():
+def create_part(api_client):
+    """
+    Creates a test part and returns its ID.
+    """
+
     payload = {
         "name": f"AutoPart-{uuid.uuid4()}",
         "description": "Test Part",
         "active": True
     }
-    response = requests.post(BASE_URL + PART_ENDPOINT, json=payload, headers=HEADERS)
-    assert response.status_code in [200, 201]
-    return response.json()["pk"]
+
+    response = api_client.post(PART_ENDPOINT, payload)
+
+    assert response.status_code in [200, 201], "Failed to create part in fixture"
+
+    data = response.json()
+
+    part_id = data.get("pk") or data.get("id")
+
+    logger.info(f"Created part with ID: {part_id}")
+
+    return part_id
+
+
+# =========================
+# ASSERT HELPER
+# =========================
+def assert_response(response, expected_status, test_name=""):
+    try:
+        body = response.json()
+    except Exception:
+        body = response.text
+
+    if response.status_code != expected_status:
+        logger.error("❌ FAILED: %s", test_name)
+        logger.error("URL: %s", response.url)
+        logger.error("Expected: %s | Got: %s", expected_status, response.status_code)
+        logger.error("Response: %s", body)
+
+        pytest.fail(
+            f"""
+❌ TEST FAILED: {test_name}
+
+➡ URL: {response.url}
+➡ Expected: {expected_status}
+➡ Got: {response.status_code}
+
+📦 Response:
+{body}
+            """
+        )
+
+    logger.info("✅ PASSED: %s", test_name)
 
 
 # =========================
@@ -59,100 +94,96 @@ def create_part():
 # =========================
 @pytest.mark.parametrize("payload, expected_status", [
     ({"name": f"ValidPart-{uuid.uuid4()}"}, 201),
-    ({}, 400),  # missing required
+    ({}, 400),
     ({"name": ""}, 400),
 ])
-def test_create_part(payload, expected_status):
-    logger.info(f"Creating part with payload: {payload}")
+def test_create_part(api_client, payload, expected_status):
+    logger.info(f"Creating part: {payload}")
 
-    response = requests.post(BASE_URL + PART_ENDPOINT, json=payload, headers=HEADERS)
+    response = api_client.post(PART_ENDPOINT, payload)
 
-    assert response.status_code == expected_status
+    assert_response(
+        response,
+        expected_status,
+        f"TC_CRUD_001 - Create Part {payload}"
+    )
 
 
 # =========================
 # PUT - FULL UPDATE
 # =========================
-def test_put_update_part(create_part):
-    part_id = create_part
-
+def test_put_update_part(api_client, create_part):
     payload = {
         "name": f"Updated-{uuid.uuid4()}",
         "description": "Updated Desc",
         "active": False
     }
 
-    url = f"{BASE_URL}{PART_ENDPOINT}{part_id}/"
-    response = requests.put(url, json=payload, headers=HEADERS)
+    url = f"{PART_ENDPOINT}{create_part}/"
+    response = api_client.api_client.put(url, json=payload, headers=api_client.headers)
 
-    logger.info(f"PUT update response: {response.json()}")
+    assert_response(response, 200, "TC_CRUD_002 - PUT Update Part")
 
-    assert response.status_code == 200
     assert response.json()["name"] == payload["name"]
 
 
 # =========================
 # PATCH - PARTIAL UPDATE
 # =========================
-def test_patch_update_part(create_part):
-    part_id = create_part
-
+def test_patch_update_part(api_client, create_part):
     payload = {"description": "Patched Desc"}
 
-    url = f"{BASE_URL}{PART_ENDPOINT}{part_id}/"
-    response = requests.patch(url, json=payload, headers=HEADERS)
+    url = f"{PART_ENDPOINT}{create_part}/"
+    response = api_client.api_client.patch(url, json=payload, headers=api_client.headers)
 
-    assert response.status_code == 200
+    assert_response(response, 200, "TC_CRUD_003 - PATCH Update Part")
+
     assert response.json()["description"] == "Patched Desc"
 
 
 # =========================
 # DELETE PART
 # =========================
-def test_delete_part(create_part):
-    part_id = create_part
+def test_delete_part(api_client, create_part):
+    url = f"{PART_ENDPOINT}{create_part}/"
+    response = api_client.delete(url)
 
-    url = f"{BASE_URL}{PART_ENDPOINT}{part_id}/"
-    response = requests.delete(url, headers=HEADERS)
-
-    assert response.status_code in [200, 204]
+    assert_response(response, 200, "TC_CRUD_004 - DELETE Part")
 
 
 # =========================
 # NEGATIVE DELETE
 # =========================
-def test_delete_invalid_part():
-    url = f"{BASE_URL}{PART_ENDPOINT}999999/"
-    response = requests.delete(url, headers=HEADERS)
+def test_delete_invalid_part(api_client):
+    response = api_client.delete(f"{PART_ENDPOINT}999999/")
 
     assert response.status_code in [404, 400]
 
 
 # =========================
-# IDEMPOTENCY TEST (DELETE)
+# IDEMPOTENCY TEST
 # =========================
-def test_delete_idempotency(create_part):
-    part_id = create_part
-    url = f"{BASE_URL}{PART_ENDPOINT}{part_id}/"
+def test_delete_idempotency(api_client, create_part):
+    url = f"{PART_ENDPOINT}{create_part}/"
 
-    first = requests.delete(url, headers=HEADERS)
-    second = requests.delete(url, headers=HEADERS)
+    first = api_client.delete(url)
+    second = api_client.delete(url)
 
     assert first.status_code in [200, 204]
-    assert second.status_code in [404, 400]  # already deleted
+
+    assert second.status_code in [404, 400]
 
 
 # =========================
 # RATE LIMIT TEST
 # =========================
-def test_rate_limiting():
-    url = BASE_URL + PART_ENDPOINT
-
+def test_rate_limiting(api_client):
     responses = []
+
     for _ in range(20):
-        r = requests.get(url, headers=HEADERS)
+        r = api_client.get(PART_ENDPOINT)
         responses.append(r.status_code)
 
-    logger.info(f"Rate test responses: {responses}")
+    logger.info(f"Rate limit responses: {responses}")
 
     assert all(code in [200, 429] for code in responses)

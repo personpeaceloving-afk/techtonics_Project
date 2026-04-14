@@ -1,17 +1,25 @@
 """
 Test Module: test_category_crud.py
+
 Description:
-    CRUD Test Suite for Category APIs
+    CRUD + Negative + Boundary test suite for Category APIs.
+    Uses service layer + centralized client for maintainability.
 """
 
 import os
-import requests
-import pytest
-import logging
 import uuid
+import pytest
+
+from src.app.api_client import APIClient
+from src.app.services.category_service import CategoryService
+from utils.logger import get_logger
+from utils.validators import validate_list
+
+# =========================
+# CONFIGURATION
+# =========================
 
 BASE_URL = os.environ.get("BASE_URL", "https://demo.inventree.org/api")
-CATEGORY_ENDPOINT = "/part/category/"
 AUTH_TOKEN = os.environ.get("INVENTREE_TOKEN")
 
 HEADERS = {
@@ -19,42 +27,66 @@ HEADERS = {
     "Content-Type": "application/json"
 } if AUTH_TOKEN else {}
 
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
+
+api_client = APIClient(base_url=BASE_URL, headers=HEADERS)
+category_service = CategoryService(api_client)
 
 
 # =========================
 # FIXTURE
 # =========================
+
 @pytest.fixture
 def create_category():
+    """
+    Creates a category for reuse in test cases.
+    """
+
+    logger.info("Creating category via fixture")
+
     payload = {
         "name": f"Category-{uuid.uuid4()}",
         "description": "Test Category"
     }
-    response = requests.post(BASE_URL + CATEGORY_ENDPOINT, json=payload, headers=HEADERS)
 
-    assert response.status_code in [200, 201]
-    return response.json()["pk"]
+    response = api_client.post("/part/category/", payload)
+
+    assert response.status_code in [200, 201], response.text
+
+    data = response.json()
+    assert "pk" in data, "Primary key missing in response"
+
+    return data["pk"]
 
 
 # =========================
-# POST CATEGORY
+# CREATE CATEGORY
 # =========================
-@pytest.mark.parametrize("payload, expected", [
+
+@pytest.mark.parametrize("payload, expected_status", [
     ({"name": f"Cat-{uuid.uuid4()}"}, 201),
     ({}, 400),
 ])
-def test_create_category(payload, expected):
-    response = requests.post(BASE_URL + CATEGORY_ENDPOINT, json=payload, headers=HEADERS)
+def test_create_category(payload, expected_status):
+    logger.info("TEST: create_category")
 
-    assert response.status_code == expected
+    response = api_client.post("/part/category/", payload)
+
+    logger.info(f"Status Code: {response.status_code}")
+
+    assert response.status_code == expected_status, (
+        f"Expected {expected_status}, got {response.status_code} | {response.text}"
+    )
 
 
 # =========================
-# PUT CATEGORY
+# UPDATE CATEGORY (PUT)
 # =========================
+
 def test_put_category(create_category):
+    logger.info("TEST: put_category")
+
     cat_id = create_category
 
     payload = {
@@ -62,58 +94,69 @@ def test_put_category(create_category):
         "description": "Updated"
     }
 
-    url = f"{BASE_URL}{CATEGORY_ENDPOINT}{cat_id}/"
-    response = requests.put(url, json=payload, headers=HEADERS)
+    response = api_client.put(f"/part/category/{cat_id}/", payload)
 
-    assert response.status_code == 200
+    assert response.status_code == 200, response.text
     assert response.json()["name"] == payload["name"]
 
 
 # =========================
 # PATCH CATEGORY
 # =========================
+
 def test_patch_category(create_category):
+    logger.info("TEST: patch_category")
+
     cat_id = create_category
 
     payload = {"description": "Patched"}
 
-    url = f"{BASE_URL}{CATEGORY_ENDPOINT}{cat_id}/"
-    response = requests.patch(url, json=payload, headers=HEADERS)
+    response = api_client.patch(f"/part/category/{cat_id}/", payload)
 
-    assert response.status_code == 200
+    assert response.status_code == 200, response.text
+    assert response.json().get("description") == "Patched"
 
 
 # =========================
 # DELETE CATEGORY
 # =========================
+
 def test_delete_category(create_category):
+    logger.info("TEST: delete_category")
+
     cat_id = create_category
 
-    url = f"{BASE_URL}{CATEGORY_ENDPOINT}{cat_id}/"
-    response = requests.delete(url, headers=HEADERS)
+    response = api_client.delete(f"/part/category/{cat_id}/")
 
-    assert response.status_code in [200, 204]
+    assert response.status_code in [200, 204], response.text
 
 
 # =========================
-# NEGATIVE CATEGORY
+# NEGATIVE TEST
 # =========================
+
 def test_invalid_category_update():
-    url = f"{BASE_URL}{CATEGORY_ENDPOINT}999999/"
-    response = requests.put(url, json={"name": "X"}, headers=HEADERS)
+    logger.info("TEST: invalid_category_update")
+
+    response = api_client.put(
+        "/part/category/999999/",
+        {"name": "X"}
+    )
 
     assert response.status_code in [404, 400]
 
 
 # =========================
-# IDEMPOTENCY
+# IDEMPOTENCY TEST
 # =========================
-def test_category_delete_idempotency(create_category):
-    cat_id = create_category
-    url = f"{BASE_URL}{CATEGORY_ENDPOINT}{cat_id}/"
 
-    first = requests.delete(url, headers=HEADERS)
-    second = requests.delete(url, headers=HEADERS)
+def test_category_delete_idempotency(create_category):
+    logger.info("TEST: delete_idempotency")
+
+    cat_id = create_category
+
+    first = api_client.delete(f"/part/category/{cat_id}/")
+    second = api_client.delete(f"/part/category/{cat_id}/")
 
     assert first.status_code in [200, 204]
     assert second.status_code in [404, 400]
@@ -122,12 +165,16 @@ def test_category_delete_idempotency(create_category):
 # =========================
 # BOUNDARY TEST
 # =========================
+
 @pytest.mark.parametrize("name", [
-    "A" * 255,   # max length
-    "",          # empty
+    "A" * 255,
+    "",
 ])
 def test_category_name_boundary(name):
+    logger.info(f"TEST: boundary_name = {name}")
+
     payload = {"name": name}
-    response = requests.post(BASE_URL + CATEGORY_ENDPOINT, json=payload, headers=HEADERS)
+
+    response = api_client.post("/part/category/", payload)
 
     assert response.status_code in [201, 400]

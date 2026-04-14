@@ -1,328 +1,240 @@
-import requests
+"""
+Module: test_part_edge_cases.py
+
+Description:
+    Comprehensive edge case and negative test scenarios for Part APIs.
+    Focuses on authentication, validation, relational integrity, and API robustness.
+
+Design Principles:
+    - No direct requests usage
+    - Uses APIClient / service layer abstraction
+    - Structured logging instead of print
+    - Maintainable enterprise-grade test design
+"""
+
+import pytest
+from utils.logger import get_logger
+
+logger = get_logger(__name__)
 
 
-# =========================
+# =========================================================
 # 🔴 AUTH & ACCESS CONTROL
-# =========================
+# =========================================================
 
-def test_no_auth_access(base_url):
+def test_no_auth_access(api_client):
     """
     Verify API rejects requests without authentication token
     Expected: 401 Unauthorized
     """
-    response = requests.get(f"{base_url}/part/")
-    print("\nNO AUTH:", response.text)
+    response = api_client.get("/part/")
 
+    logger.info(f"NO AUTH RESPONSE: {response.text}")
     assert response.status_code == 401
 
 
-def test_invalid_token(base_url):
+def test_invalid_token(api_client):
     """
     Verify API rejects invalid authentication token
     Expected: 401 or 403
     """
-    headers = {"Authorization": "Token invalid123"}
+    api_client.headers["Authorization"] = "Token invalid123"
 
-    response = requests.get(f"{base_url}/part/", headers=headers)
-    print("\nINVALID TOKEN:", response.text)
+    response = api_client.get("/part/")
 
+    logger.info(f"INVALID TOKEN RESPONSE: {response.text}")
     assert response.status_code in [401, 403]
 
 
-# =========================
-# 🔴 INVALID QUERY PARAMS
-# =========================
+# =========================================================
+# 🔴 INVALID QUERY PARAMETERS
+# =========================================================
 
-def test_invalid_pagination(base_url, headers):
-    """
-    Verify API behavior for invalid pagination values (negative limit)
-    Expected: Either 400 (strict validation) or 200 (graceful handling)
-    """
-    response = requests.get(f"{base_url}/part/?limit=-1", headers=headers)
-    print("\nINVALID PAGINATION:", response.text)
+def test_invalid_pagination(api_client):
+    response = api_client.get("/part/?limit=-1")
 
-    assert response.status_code in [400, 200]
+    logger.info(f"INVALID PAGINATION: {response.text}")
+    assert response.status_code in [200, 400]
 
 
-def test_invalid_ordering(base_url, headers):
-    """
-    Verify API behavior for invalid ordering field
-    Expected: Either ignore and return 200 OR return validation error
-    """
-    response = requests.get(f"{base_url}/part/?ordering=invalid_field", headers=headers)
-    print("\nINVALID ORDERING:", response.text)
+def test_invalid_ordering(api_client):
+    response = api_client.get("/part/?ordering=invalid_field")
 
-    assert response.status_code in [400, 200]
+    logger.info(f"INVALID ORDERING: {response.text}")
+    assert response.status_code in [200, 400]
 
 
-def test_invalid_search_param(base_url, headers):
-    """
-    Verify API handles special characters in search query
-    Expected: 200 with empty or filtered results
-    """
-    response = requests.get(f"{base_url}/part/?search=%$#@", headers=headers)
-    print("\nINVALID SEARCH:", response.text)
+def test_invalid_search_param(api_client):
+    response = api_client.get("/part/?search=%$#@")
 
+    logger.info(f"INVALID SEARCH: {response.text}")
     assert response.status_code == 200
 
 
-# =========================
+# =========================================================
 # 🔴 FIELD VALIDATION
-# =========================
+# =========================================================
 
-def test_max_length_violation(base_url, headers):
-    """
-    Verify API enforces max length constraint on 'name' field
-    Expected: 400 Bad Request or 422 Unprocessable Entity
-    """
-    payload = {
-        "name": "X" * 1000  # Exceeds allowed length
-    }
+def test_max_length_violation(api_client):
+    payload = {"name": "X" * 1000}
 
-    response = requests.post(f"{base_url}/part/", json=payload, headers=headers)
-    print("\nMAX LENGTH:", response.text)
+    response = api_client.post("/part/", payload)
 
+    logger.info(f"MAX LENGTH RESPONSE: {response.text}")
     assert response.status_code in [400, 422]
 
 
-def test_null_required_field(base_url, headers):
-    """
-    Verify API rejects null value for required field 'name'
-    Expected: 400 Bad Request
-    """
-    payload = {
-        "name": None
-    }
+def test_null_required_field(api_client):
+    payload = {"name": None}
 
-    response = requests.post(f"{base_url}/part/", json=payload, headers=headers)
-    print("\nNULL FIELD:", response.text)
+    response = api_client.post("/part/", payload)
 
+    logger.info(f"NULL FIELD RESPONSE: {response.text}")
     assert response.status_code == 400
 
 
-def test_read_only_field(base_url, headers):
-    """
-    Verify API behavior when read-only field (id) is sent in payload
-    Expected: Either ignored OR validation error
-    """
-    payload = {
-        "id": 999,
-        "name": "Test ReadOnly"
-    }
+def test_read_only_field(api_client):
+    payload = {"id": 999, "name": "Test ReadOnly"}
 
-    response = requests.post(f"{base_url}/part/", json=payload, headers=headers)
-    print("\nREAD ONLY FIELD:", response.text)
+    response = api_client.post("/part/", payload)
 
+    logger.info(f"READ ONLY FIELD RESPONSE: {response.text}")
     assert response.status_code in [400, 201]
 
 
-# =========================
+# =========================================================
 # 🔴 CATEGORY EDGE CASES
-# =========================
+# =========================================================
 
-def test_invalid_category_filter(base_url, headers):
-    """
-    Verify API handles invalid category filter ID
-    Expected: 200 with empty result set
-    """
-    response = requests.get(f"{base_url}/part/?category=999999", headers=headers)
-    print("\nINVALID CATEGORY FILTER:", response.json())
+def test_invalid_category_filter(api_client):
+    response = api_client.get("/part/?category=999999")
 
+    logger.info(f"INVALID CATEGORY FILTER: {response.text}")
     assert response.status_code == 200
 
 
-def test_category_depth_filter(base_url, headers):
-    """
-    Verify API handles extreme category depth value
-    Expected: 200 with valid hierarchical response
-    """
-    response = requests.get(f"{base_url}/part/category/?depth=999", headers=headers)
-    print("\nCATEGORY DEPTH:", response.json())
+def test_category_depth_filter(api_client):
+    response = api_client.get("/part/category/?depth=999")
 
+    logger.info(f"CATEGORY DEPTH: {response.text}")
     assert response.status_code == 200
 
 
-def test_category_parent_invalid(base_url, headers):
-    """
-    Verify API handles invalid parent category ID
-    Expected: 200 with empty results
-    """
-    response = requests.get(f"{base_url}/part/category/?parent=999999", headers=headers)
-    print("\nINVALID PARENT:", response.json())
+def test_category_parent_invalid(api_client):
+    response = api_client.get("/part/category/?parent=999999")
 
+    logger.info(f"INVALID PARENT CATEGORY: {response.text}")
     assert response.status_code == 200
 
 
-# =========================
+# =========================================================
 # 🔴 RELATIONAL INTEGRITY
-# =========================
+# =========================================================
 
-def test_invalid_part_relation(base_url, headers):
-    """
-    Verify API rejects relationship creation with non-existent part IDs
-    Expected: 400 or 404
-    """
-    payload = {
-        "part_1": 99999,
-        "part_2": 99998
-    }
+def test_invalid_part_relation(api_client):
+    payload = {"part_1": 99999, "part_2": 99998}
 
-    response = requests.post(f"{base_url}/part/related/", json=payload, headers=headers)
-    print("\nINVALID RELATION:", response.text)
+    response = api_client.post("/part/related/", payload)
 
+    logger.info(f"INVALID RELATION: {response.text}")
     assert response.status_code in [400, 404]
 
 
-def test_self_reference_relation(base_url, headers):
-    """
-    Verify API prevents a part from referencing itself
-    Expected: 400 or 409 conflict
-    """
-    payload = {
-        "part_1": 1,
-        "part_2": 1
-    }
+def test_self_reference_relation(api_client):
+    payload = {"part_1": 1, "part_2": 1}
 
-    response = requests.post(f"{base_url}/part/related/", json=payload, headers=headers)
-    print("\nSELF RELATION:", response.text)
+    response = api_client.post("/part/related/", payload)
 
+    logger.info(f"SELF REFERENCE: {response.text}")
     assert response.status_code in [400, 409]
 
 
-# =========================
+# =========================================================
 # 🔴 PARAMETER API EDGE CASES
-# =========================
+# =========================================================
 
-def test_invalid_parameter_template(base_url, headers):
-    """
-    Verify API rejects invalid parameter template reference
-    Expected: 400 or 404
-    """
-    payload = {
-        "part": 1,
-        "template": 99999
-    }
+def test_invalid_parameter_template(api_client):
+    payload = {"part": 1, "template": 99999}
 
-    response = requests.post(f"{base_url}/part/parameter/", json=payload, headers=headers)
-    print("\nINVALID TEMPLATE:", response.text)
+    response = api_client.post("/part/parameter/", payload)
 
+    logger.info(f"INVALID TEMPLATE: {response.text}")
     assert response.status_code in [400, 404]
 
 
-def test_parameter_missing_required(base_url, headers):
-    """
-    Verify API rejects request when required parameter fields are missing
-    Expected: 400 Bad Request
-    """
-    payload = {}
+def test_parameter_missing_required(api_client):
+    response = api_client.post("/part/parameter/", {})
 
-    response = requests.post(f"{base_url}/part/parameter/", json=payload, headers=headers)
-    print("\nMISSING PARAM FIELD:", response.text)
-
+    logger.info(f"MISSING PARAMS: {response.text}")
     assert response.status_code == 400
 
 
-# =========================
-# 🔴 METADATA API EDGE CASES
-# =========================
+# =========================================================
+# 🔴 METADATA EDGE CASES
+# =========================================================
 
-def test_metadata_invalid_id(base_url, headers):
-    """
-    Verify metadata API behavior for non-existent template ID
-    Expected: 404 or empty response
-    """
-    response = requests.get(f"{base_url}/part/parameter/template/999999/metadata/", headers=headers)
-    print("\nMETADATA INVALID ID:", response.text)
+def test_metadata_invalid_id(api_client):
+    response = api_client.get(
+        "/part/parameter/template/999999/metadata/"
+    )
 
+    logger.info(f"INVALID METADATA ID: {response.text}")
     assert response.status_code in [404, 200]
 
 
-def test_metadata_invalid_payload(base_url, headers):
-    """
-    Verify API rejects invalid metadata format
-    Expected: 400 or validation error
-    """
-    payload = {
-        "metadata": "invalid_format"
-    }
+def test_metadata_invalid_payload(api_client):
+    payload = {"metadata": "invalid_format"}
 
-    response = requests.patch(
-        f"{base_url}/part/parameter/template/1/metadata/",
-        json=payload,
-        headers=headers
+    response = api_client.patch(
+        "/part/parameter/template/1/metadata/",
+        payload
     )
 
-    print("\nINVALID METADATA:", response.text)
-
+    logger.info(f"INVALID METADATA: {response.text}")
     assert response.status_code in [400, 200]
 
 
-# =========================
-# 🔴 BOM VALIDATION EDGE CASES
-# =========================
+# =========================================================
+# 🔴 BOM EDGE CASES
+# =========================================================
 
-def test_bom_validation_invalid_part(base_url, headers):
-    """
-    Verify BOM validation for non-existent part
-    Expected: 404 or validation response
-    """
-    response = requests.get(f"{base_url}/part/999999/bom-validate/", headers=headers)
-    print("\nBOM INVALID:", response.text)
+def test_bom_validation_invalid_part(api_client):
+    response = api_client.get("/part/999999/bom-validate/")
 
+    logger.info(f"BOM INVALID PART: {response.text}")
     assert response.status_code in [404, 200]
 
 
-def test_bom_invalid_payload(base_url, headers):
-    """
-    Verify BOM validation rejects incorrect payload format
-    Expected: 400 or validation error
-    """
-    payload = {
-        "checksum": 12345
-    }
+def test_bom_invalid_payload(api_client):
+    payload = {"checksum": 12345}
 
-    response = requests.patch(
-        f"{base_url}/part/1/bom-validate/",
-        json=payload,
-        headers=headers
-    )
+    response = api_client.patch("/part/1/bom-validate/", payload)
 
-    print("\nBOM INVALID PAYLOAD:", response.text)
-
+    logger.info(f"BOM INVALID PAYLOAD: {response.text}")
     assert response.status_code in [400, 200]
 
 
-# =========================
-# 🔴 CONTENT-TYPE EDGE CASES
-# =========================
+# =========================================================
+# 🔴 CONTENT TYPE EDGE CASES
+# =========================================================
 
-def test_invalid_content_type(base_url, headers):
-    """
-    Verify API rejects unsupported content type
-    Expected: 400 or 415 Unsupported Media Type
-    """
-    headers["Content-Type"] = "text/plain"
+def test_invalid_content_type(api_client):
+    headers = {"Content-Type": "text/plain"}
 
-    response = requests.post(f"{base_url}/part/", data="invalid", headers=headers)
-    print("\nINVALID CONTENT TYPE:", response.text)
+    response = api_client.post("/part/", "invalid", headers=headers)
 
+    logger.info(f"INVALID CONTENT TYPE: {response.text}")
     assert response.status_code in [400, 415]
 
 
-# =========================
+# =========================================================
 # 🔴 LARGE PAYLOAD
-# =========================
+# =========================================================
 
-def test_large_payload(base_url, headers):
-    """
-    Verify API behavior with extremely large payload
-    Expected: 400 or 413 Payload Too Large
-    """
-    payload = {
-        "name": "A" * 5000
-    }
+def test_large_payload(api_client):
+    payload = {"name": "A" * 5000}
 
-    response = requests.post(f"{base_url}/part/", json=payload, headers=headers)
-    print("\nLARGE PAYLOAD:", response.text)
+    response = api_client.post("/part/", payload)
 
+    logger.info(f"LARGE PAYLOAD: {response.text}")
     assert response.status_code in [400, 413]
